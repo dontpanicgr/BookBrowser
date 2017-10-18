@@ -18,11 +18,11 @@ deps:
 
 .PHONY: generate
 generate:
-	go generate
+	go generate ./...
 
 .PHONY: test
 test:
-	go test -v .
+	go test ./...
 
 .PHONY: build
 build:
