@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sort"
+	"strings"
 
 	"github.com/geek1011/BookBrowser/formats"
 	"github.com/geek1011/BookBrowser/models"
@@ -25,7 +26,7 @@ type IndexerError struct {
 }
 
 // NewBookListFromDir creates a BookList from a directory of books.
-func NewBookListFromDir(dir, coverOutDir string, verbose bool) (*BookList, []*IndexerError) {
+func NewBookListFromDir(dir, coverOutDir string, verbose, nocovers bool) (*BookList, []*IndexerError) {
 	errors := []*IndexerError{}
 	books := BookList{}
 
@@ -76,7 +77,7 @@ func NewBookListFromDir(dir, coverOutDir string, verbose bool) (*BookList, []*In
 				continue
 			}
 
-			if cover != nil {
+			if !nocovers && book.HasCover && cover != nil {
 				coverPath := filepath.Join(coverOutDir, book.ID+".jpg")
 				thumbPath := filepath.Join(coverOutDir, book.ID+"_thumb.jpg")
 
@@ -105,6 +106,10 @@ func NewBookListFromDir(dir, coverOutDir string, verbose bool) (*BookList, []*In
 				}
 
 				book.HasCover = true
+			}
+
+			if nocovers {
+				book.HasCover = false
 			}
 
 			books = append(books, book)
@@ -268,4 +273,92 @@ func (l *BookList) HasSeries(id string) bool {
 		}
 	}
 	return exists
+}
+
+// SortBy sorts by sort, and returns a sorted copy. If sorter is invalid, it returns the original list.
+//
+// sort can be:
+// - author-asc
+// - author-desc
+// - title-asc
+// - title-desc
+// - series-asc
+// - series-desc
+// - seriesindex-asc
+// - seriesindex-desc
+// - modified-desc
+func (l *BookList) SortBy(sort string) (nl *BookList, sorted bool) {
+	sort = strings.ToLower(sort)
+
+	nb := *l
+
+	switch sort {
+	case "author-asc":
+		nb = nb.Sorted(func(a, b *models.Book) bool {
+			if a.Author != nil && b.Author != nil {
+				return a.Author.Name < b.Author.Name
+			}
+			return false
+		})
+		break
+	case "author-desc":
+		nb = nb.Sorted(func(a, b *models.Book) bool {
+			if a.Author != nil && b.Author != nil {
+				return a.Author.Name > b.Author.Name
+			}
+			return false
+		})
+		break
+	case "title-asc":
+		nb = nb.Sorted(func(a, b *models.Book) bool {
+			return a.Title < b.Title
+		})
+		break
+	case "title-desc":
+		nb = nb.Sorted(func(a, b *models.Book) bool {
+			return a.Title > b.Title
+		})
+		break
+	case "series-asc":
+		nb = nb.Sorted(func(a, b *models.Book) bool {
+			if a.Series != nil && b.Series != nil {
+				return a.Series.Name < b.Series.Name
+			}
+			return false
+		})
+		break
+	case "series-desc":
+		nb = nb.Sorted(func(a, b *models.Book) bool {
+			if a.Series != nil && b.Series != nil {
+				return a.Series.Name > b.Series.Name
+			}
+			return false
+		})
+		break
+	case "seriesindex-asc":
+		nb = nb.Sorted(func(a, b *models.Book) bool {
+			if a.Series != nil && b.Series != nil {
+				return a.Series.Index < b.Series.Index
+			}
+			return false
+		})
+		break
+	case "seriesindex-desc":
+		nb = nb.Sorted(func(a, b *models.Book) bool {
+			if a.Series != nil && b.Series != nil {
+				return a.Series.Index > b.Series.Index
+			}
+			return false
+		})
+		break
+	case "modified-desc":
+		nb = nb.Sorted(func(a, b *models.Book) bool {
+			return a.ModTime.Unix() > b.ModTime.Unix()
+		})
+		break
+	default:
+		return &nb, false
+	}
+
+	return &nb, true
 }

@@ -32,6 +32,7 @@ type Server struct {
 	booksLock *sync.RWMutex
 	BookDir   string
 	CoverDir  string
+	NoCovers  bool
 	Addr      string
 	Verbose   bool
 	router    *httprouter.Router
@@ -40,13 +41,14 @@ type Server struct {
 }
 
 // NewServer creates a new BookBrowser server. It will not index the books automatically.
-func NewServer(addr, bookdir, coverdir, version string, verbose bool) *Server {
+func NewServer(addr, bookdir, coverdir, version string, verbose, nocovers bool) *Server {
 	s := &Server{
 		Books:     &booklist.BookList{},
 		booksLock: &sync.RWMutex{},
 		BookDir:   bookdir,
 		Addr:      addr,
 		CoverDir:  coverdir,
+		NoCovers:  nocovers,
 		Verbose:   verbose,
 		router:    httprouter.New(),
 		version:   version,
@@ -72,7 +74,7 @@ func (s *Server) RefreshBookIndex() error {
 	defer s.printLog("Unlocking book index\n")
 	defer s.booksLock.Unlock()
 
-	books, errs := booklist.NewBookListFromDir(s.BookDir, s.CoverDir, s.Verbose)
+	books, errs := booklist.NewBookListFromDir(s.BookDir, s.CoverDir, s.Verbose, s.NoCovers)
 	if len(errs) != 0 {
 		if s.Verbose {
 			log.Printf("Indexing finished with %v errors", len(errs))
@@ -128,16 +130,16 @@ func (s *Server) initRouter() {
 
 	s.router.GET("/books.json", s.handleBooksJSON)
 
-	s.router.GET("/books", s.handleBookList)
+	s.router.GET("/books", s.handleBooks)
 	s.router.GET("/books/:id", s.handleBook)
 
-	s.router.GET("/authors", s.handleAuthorList)
+	s.router.GET("/authors", s.handleAuthors)
 	s.router.GET("/authors/:id", s.handleAuthor)
 
-	s.router.GET("/series", s.handleSeriesList)
+	s.router.GET("/series", s.handleSeriess)
 	s.router.GET("/series/:id", s.handleSeries)
 
-	s.router.GET("/download", s.handleDownloadList)
+	s.router.GET("/download", s.handleDownloads)
 	s.router.GET("/download/:filename", s.handleDownload)
 
 	s.router.GET("/static/*filepath", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
@@ -147,7 +149,7 @@ func (s *Server) initRouter() {
 	s.router.ServeFiles("/covers/*filepath", http.Dir(s.CoverDir))
 }
 
-func (s *Server) handleDownloadList(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (s *Server) handleDownloads(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	s.booksLock.RLock()
 	defer s.booksLock.RUnlock()
 
@@ -290,7 +292,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request, p httpro
 	io.WriteString(w, "Could not find book with id "+bid)
 }
 
-func (s *Server) handleAuthorList(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (s *Server) handleAuthors(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	s.booksLock.RLock()
 	defer s.booksLock.RUnlock()
 
@@ -319,6 +321,12 @@ func (s *Server) handleAuthor(w http.ResponseWriter, r *http.Request, p httprout
 	}
 
 	if aname != "" {
+		bl := s.Books.Filtered(func(book *models.Book) bool {
+			return book.Author != nil && book.Author.ID == p.ByName("id")
+		})
+		bl, _ = bl.SortBy("title-asc")
+		bl, _ = bl.SortBy(r.URL.Query().Get("sort"))
+
 		s.render.HTML(w, http.StatusOK, "author", map[string]interface{}{
 			"CurVersion":       s.version,
 			"PageTitle":        aname,
@@ -326,11 +334,7 @@ func (s *Server) handleAuthor(w http.ResponseWriter, r *http.Request, p httprout
 			"ShowSearch":       false,
 			"ShowViewSelector": true,
 			"Title":            aname,
-			"Books": s.Books.Filtered(func(book *models.Book) bool {
-				return book.Author != nil && book.Author.ID == p.ByName("id")
-			}).Sorted(func(a, b *models.Book) bool {
-				return a.Title < b.Title
-			}),
+			"Books":            bl,
 		})
 		return
 	}
@@ -346,7 +350,7 @@ func (s *Server) handleAuthor(w http.ResponseWriter, r *http.Request, p httprout
 	})
 }
 
-func (s *Server) handleSeriesList(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (s *Server) handleSeriess(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	s.booksLock.RLock()
 	defer s.booksLock.RUnlock()
 
@@ -375,6 +379,12 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request, p httprout
 	}
 
 	if sname != "" {
+		bl := s.Books.Filtered(func(book *models.Book) bool {
+			return book.Series != nil && book.Series.ID == p.ByName("id")
+		})
+		bl, _ = bl.SortBy("seriesindex-asc")
+		bl, _ = bl.SortBy(r.URL.Query().Get("sort"))
+
 		s.render.HTML(w, http.StatusOK, "series", map[string]interface{}{
 			"CurVersion":       s.version,
 			"PageTitle":        sname,
@@ -402,9 +412,12 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request, p httprout
 	})
 }
 
-func (s *Server) handleBookList(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+func (s *Server) handleBooks(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	s.booksLock.RLock()
 	defer s.booksLock.RUnlock()
+
+	bl, _ := s.Books.SortBy("modified-desc")
+	bl, _ = bl.SortBy(r.URL.Query().Get("sort"))
 
 	s.render.HTML(w, http.StatusOK, "books", map[string]interface{}{
 		"CurVersion":       s.version,
@@ -413,7 +426,7 @@ func (s *Server) handleBookList(w http.ResponseWriter, r *http.Request, _ httpro
 		"ShowSearch":       true,
 		"ShowViewSelector": true,
 		"Title":            "",
-		"Books":            s.Books,
+		"Books":            bl,
 	})
 }
 
@@ -455,6 +468,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, _ httprout
 	ql := strings.ToLower(q)
 
 	if len(q) != 0 {
+		bl := s.Books.Filtered(func(a *models.Book) bool {
+			matches := false
+			matches = matches || a.Author != nil && strings.Contains(strings.ToLower(a.Author.Name), ql)
+			matches = matches || strings.Contains(strings.ToLower(a.Title), ql)
+			matches = matches || a.Series != nil && strings.Contains(strings.ToLower(a.Series.Name), ql)
+			return matches
+		})
+		bl, _ = bl.SortBy("title-asc")
+		bl, _ = bl.SortBy(r.URL.Query().Get("sort"))
+
 		s.render.HTML(w, http.StatusOK, "search", map[string]interface{}{
 			"CurVersion":       s.version,
 			"PageTitle":        "Search Results",
@@ -463,13 +486,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request, _ httprout
 			"ShowViewSelector": true,
 			"Title":            "Search Results",
 			"Query":            q,
-			"Books": s.Books.Filtered(func(a *models.Book) bool {
-				matches := false
-				matches = matches || a.Author != nil && strings.Contains(strings.ToLower(a.Author.Name), ql)
-				matches = matches || strings.Contains(strings.ToLower(a.Title), ql)
-				matches = matches || a.Series != nil && strings.Contains(strings.ToLower(a.Series.Name), ql)
-				return matches
-			}),
+			"Books":            bl,
 		})
 		return
 	}
